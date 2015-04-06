@@ -1,5 +1,6 @@
 var chalk = require('chalk');
 var spawn = require('child_process').spawn;
+var exec = require('child_process').exec;
 var async = require('async');
 var fs = require('fs');
 var path = require('path');
@@ -7,7 +8,7 @@ var pidFile = process.env.HOME + '/.runs/service.pid';
 
 module.exports = function (grunt) {
 
-    function stopSync(cb) {
+    function stopSync(callback) {
 
         var exists = fs.existsSync(pidFile);
 
@@ -25,14 +26,15 @@ module.exports = function (grunt) {
             // clean up the file
             fs.unlinkSync(pidFile);
 
-            // Execute the callback if passed in
-            if (cb && typeof cb === 'function') {
-                cb();
-            }
         }
 
         // remove the listener on exit
         process.removeListener('exit', stopSync);
+
+        // Execute the callback if passed in
+        if (callback && typeof callback === 'function') {
+            return callback();
+        }
 
     }
 
@@ -40,7 +42,7 @@ module.exports = function (grunt) {
     grunt.registerMultiTask('runs', '', function () {
 
         // catch any events that trigger the stop
-        process.on('stop:' + this.target, function (cb, remove) {
+        process.on('runs:'  + this.target + ':stop', function (cb, remove) {
 
             // if passed "remove" argument, remove the exit listener
             if (remove) {
@@ -48,11 +50,12 @@ module.exports = function (grunt) {
             }
 
             // Stop
-            stopSync();
 
             // if we have a callback function, call it
             if (cb && typeof cb === 'function') {
-                cb(null);
+                return stopSync(cb);
+            } else {
+                return stopSync();
             }
 
         });
@@ -65,9 +68,12 @@ module.exports = function (grunt) {
 
         // get the options
         var options = this.options();
-        var cmd = this.data.cmd;
-        var args = this.data.args || [];
+        var cmd = '/bin/sh';
+        var args = ['-c', this.data.cmd];
         var startMsgRegex = this.data.startMsgRegex || '.*';
+        var env = this.data.env || {
+            cwd: process.cwd(),
+        };
 
         // call these async events in series
         async.series([
@@ -75,10 +81,15 @@ module.exports = function (grunt) {
             // if we're calling the stop argument, clean up and bail out
             function (cb) {
                 if (this.args.indexOf('stop') >= 0) {
-                    stopSync();
-                    cb('stopped');
+
+                    stopSync(function () {
+                        return cb('stopped');
+                    });
+
                 } else {
-                    cb(null);
+
+                    return cb(null);
+
                 }
             }.bind(this),
 
@@ -87,7 +98,7 @@ module.exports = function (grunt) {
             function (cb) {
                 fs.exists(pidFile, function (exists) {
                     if (exists) {
-                        stopSync();
+                        stopSync(cb);
                         return cb(null);
                     } else {
                         return cb(null);
@@ -104,6 +115,7 @@ module.exports = function (grunt) {
                             if (err) {
                                 return cb(err);
                             }
+
                             grunt.log.write(chalk.green(
                                 'Created "' + dirname + '"\n'
                             ));
@@ -118,50 +130,61 @@ module.exports = function (grunt) {
             // start the server
             function (cb) {
 
-
                 // spawn a child process
                 var child = spawn(
                     cmd,
                     args,
-                    {
-                        cwd: process.cwd(),
-                    }
+                    env
                 );
 
-                // for a verbose output of what the server is doing, pipe the
-                // stdout of this spawned process to the main process
-                if (!options.background) {
-                    child.stdout.pipe(process.stdout);
-                }
+                child.stdout.setEncoding('utf8');
                 child.stderr.pipe(process.stderr);
 
-                child.stdout.setEncoding('utf8');
-                child.stdout.on('data', function (data) {
+                if (!options.background) {
 
-                    var regex = new RegExp(startMsgRegex);
-                    var matchMsg = data.match(regex);
+                    grunt.log.write(chalk.green('Running in foreground: ' + args[1] + '\n'));
 
-                    // If we match the regex, we know the server is running,
-                    // so write the PID
-                    if (matchMsg) {
-                        // write the pidfile
-                        fs.writeFile(pidFile, child.pid, {encoding: 'utf8'}, function (err) {
-                            if (err) {
-                                return cb(err);
-                            }
+                    // for a verbose output of what the server is doing, pipe the
+                    // stdout of this spawned process to the main process
+                    child.stdout.pipe(process.stdout);
 
-                            // done
-                            return cb(null);
+                    // when the process finishes, call the async done
+                    child.on('exit', function () {
+                        stopSync(done);
+                    });
 
-                        });
-                    }
+                } else {
 
-                    var matchError = data.match(/Error/i);
-                    if (matchError) {
-                        return cb(new Error(data));
-                    }
+                    grunt.log.write(chalk.green('Backgrounding: ' + args[1] + '\n'));
 
-                });
+                    child.stdout.on('data', function (data) {
+
+                        var regex = new RegExp(startMsgRegex);
+                        var matchMsg = data.match(regex);
+
+                        // If we match the regex, we know the server is running,
+                        // so write the PID
+                        if (matchMsg) {
+                            // write the pidfile
+                            fs.writeFile(pidFile, child.pid, {encoding: 'utf8'}, function (err) {
+                                if (err) {
+                                    return cb(err);
+                                }
+
+                                // done
+                                cb(null);
+
+                            });
+                        }
+
+                        var matchError = data.match(/Error/i);
+                        if (matchError) {
+                            return cb(new Error(data));
+                        }
+
+                    });
+
+                }
 
                 child.stderr.on('data', function () {
                     // wait a bit for the error to write it's output, then bail
@@ -177,7 +200,7 @@ module.exports = function (grunt) {
 
             }
 
-        ], function (err) {
+        ], function (err, result) {
 
             // Catch errors
             if (err) {
@@ -191,12 +214,7 @@ module.exports = function (grunt) {
             }
 
             if (options.background) {
-                grunt.log.write(chalk.green('Backgrounding: ' + cmd + '\n'));
                 done();
-            } else {
-                // register the on exit event to stop the process if we aren't
-                // detaching to run in the background
-                process.on('exit', stopSync);
             }
 
         });

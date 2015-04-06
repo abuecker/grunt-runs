@@ -7,9 +7,3 @@ exports.runs = function (test) {
     test.ok(pids[0] === 'test.pid', "There should be a pid file 'test.pid'");
     test.done();
 };
-
-exports.runss = function (test) {
-    test.expect(1);
-    test.ok(true, "blah");
-    test.done();
-};

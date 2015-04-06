@@ -24,7 +24,7 @@ module.exports = function(grunt) {
 
     // cleanup the temp .runs directory
     clean: {
-        test: ['.runs'],
+        test: ['.runs', './BLAH.txt'],
     },
 
     // Configuration to be run (and then tested).
@@ -36,12 +36,19 @@ module.exports = function(grunt) {
             startMsgRegex: 'Started',
             cmd: './tests/bin/sleep'
         },
+        fg: {
+            options: {
+                background: false
+            },
+            cmd: 'echo "WRITING" && echo "BLAH" > ./BLAH.txt && echo "DONE"'
+        }
     },
 
     // Unit tests.
     nodeunit: {
         test: ['tests/runs_test.js'],
-        post: ['tests/runs_post_test.js']
+        post: ['tests/runs_post_test.js'],
+        fg: ['tests/runs_fg.js']
     }
 
   });
@@ -63,6 +70,8 @@ module.exports = function(grunt) {
       'nodeunit:test',
       'runs:test:stop',
       'nodeunit:post',
+      'runs:fg',
+      'nodeunit:fg',
       'clean',
   ]);
 
