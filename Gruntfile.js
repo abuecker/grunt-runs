@@ -72,7 +72,6 @@ module.exports = function(grunt) {
       'nodeunit:post',
       'runs:fg',
       'nodeunit:fg',
-      'clean',
   ]);
 
   // By default, lint and run all tests.
